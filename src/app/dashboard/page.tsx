@@ -14,6 +14,10 @@ interface Project {
   description?: string
   status: string
   createdAt: string
+  domain?: string | null
+  domainVerified?: boolean
+  studioDomain?: string | null
+  studioDomainVerified?: boolean
 }
 
 export default function DashboardPage() {
@@ -104,13 +108,19 @@ export default function DashboardPage() {
         const data = await response.json()
         const envVars = data.envVars || {}
 
-        // Extract URLs from environment variables
+        // Extract URLs from environment variables. Prefer the Traefik-routed
+        // HTTPS domain when one has been configured and verified for this
+        // project; only fall back to the raw host:port URL otherwise.
         const urls: Record<string, string> = {}
         if (envVars.KONG_HTTP_PORT) {
-          urls['API Gateway'] = `http://localhost:${envVars.KONG_HTTP_PORT}`
+          urls['API Gateway'] = project.domainVerified && project.domain
+            ? `https://${project.domain}`
+            : `http://localhost:${envVars.KONG_HTTP_PORT}`
         }
         if (envVars.STUDIO_PORT) {
-          urls['Supabase Studio'] = `http://localhost:${envVars.KONG_HTTP_PORT || 8000}`
+          urls['Supabase Studio'] = project.studioDomainVerified && project.studioDomain
+            ? `https://${project.studioDomain}`
+            : `http://localhost:${envVars.KONG_HTTP_PORT || 8000}`
         }
         if (envVars.ANALYTICS_PORT) {
           urls['Analytics (Logflare)'] = `http://localhost:${envVars.ANALYTICS_PORT}`
