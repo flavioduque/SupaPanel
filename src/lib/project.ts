@@ -3,7 +3,7 @@ import * as path from 'path'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { prisma } from './db'
-import { removeProjectTraefikConfig } from './traefik'
+import { removeProjectTraefikConfig, generateProjectTraefikConfig, verifyDomainDNS, getProjectPorts } from './traefik'
 
 const execAsync = promisify(exec)
 
@@ -196,10 +196,19 @@ export async function createProject(name: string, userId: string, description?: 
     const dockerComposeFile = path.join(projectDir, 'docker', 'docker-compose.yml')
     let dockerComposeContent = await fs.readFile(dockerComposeFile, 'utf8')
 
-    // Replace container names with project-specific names
+    // Replace container names with project-specific names.
+    // The API gateway container varies by Supabase template version: older
+    // templates ship Kong (container_name: supabase-kong) as the default,
+    // newer ones ship Envoy (container_name: supabase-envoy) instead -- only
+    // one of the two is ever actually present in a given docker-compose.yml.
+    // Both are renamed to the same `${slug}-gateway` so Traefik (see
+    // traefik.ts) can target one canonical name regardless of which gateway
+    // this project's template uses, and so the container isn't left with a
+    // global, non-project-scoped name that collides across projects.
     const containerMappings = [
       { original: 'supabase-studio', replacement: `${slug}-studio` },
-      { original: 'supabase-kong', replacement: `${slug}-kong` },
+      { original: 'supabase-kong', replacement: `${slug}-gateway` },
+      { original: 'supabase-envoy', replacement: `${slug}-gateway` },
       { original: 'supabase-auth', replacement: `${slug}-auth` },
       { original: 'supabase-rest', replacement: `${slug}-rest` },
       { original: 'realtime-dev.supabase-realtime', replacement: `realtime-dev.${slug}-realtime` },
@@ -230,6 +239,29 @@ export async function createProject(name: string, userId: string, description?: 
 
     // Write the modified docker-compose.yml back
     await fs.writeFile(dockerComposeFile, dockerComposeContent)
+
+    // Attach the API gateway (kong/envoy) and Studio containers to the
+    // shared SupaPanel/Traefik network. Without this, Traefik (which only
+    // routes to containers reachable on `supapanel-network`) can never
+    // reach a project's services, so custom-domain/HTTPS routing silently
+    // 404s/502s no matter how the domain is configured. Shipped as a
+    // docker-compose override (auto-loaded by `docker compose up` next to
+    // docker-compose.yml) instead of editing the cloned template in place,
+    // since that keeps the fix independent of the upstream file's layout.
+    const overrideContent = `services:
+  api-gw:
+    networks:
+      supapanel-network: {}
+  studio:
+    networks:
+      default: {}
+      supapanel-network: {}
+
+networks:
+  supapanel-network:
+    external: true
+`
+    await fs.writeFile(path.join(projectDir, 'docker', 'docker-compose.override.yml'), overrideContent)
 
     // Generate unique default port values to prevent conflicts
     const basePort = 8000 + (timestamp % 10000) // Use last 4 digits of timestamp for uniqueness
@@ -314,7 +346,43 @@ export async function createProject(name: string, userId: string, description?: 
       })
     }
 
-    return { success: true, project }
+    // Auto-assign a per-project subdomain so every project gets a working
+    // HTTPS URL without manual domain setup. Only runs when PANEL_BASE_DOMAIN
+    // is configured (requires a wildcard DNS record, e.g. *.supa.example.com,
+    // pointed at this server) -- otherwise domains stay manual via the
+    // existing Custom Domain Configuration UI.
+    let finalProject = project
+    const baseDomain = process.env.PANEL_BASE_DOMAIN
+    if (baseDomain) {
+      const autoApiDomain = `api-${slug}.${baseDomain}`
+      const autoStudioDomain = `${slug}.${baseDomain}`
+      const ports = getProjectPorts(defaultEnvVars)
+
+      const [apiDnsValid, studioDnsValid] = await Promise.all([
+        verifyDomainDNS(autoApiDomain),
+        verifyDomainDNS(autoStudioDomain),
+      ])
+
+      finalProject = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          domain: autoApiDomain,
+          domainVerified: apiDnsValid,
+          studioDomain: autoStudioDomain,
+          studioDomainVerified: studioDnsValid,
+        },
+      })
+
+      await generateProjectTraefikConfig({
+        projectSlug: slug,
+        domain: autoApiDomain,
+        studioDomain: autoStudioDomain,
+        kongPort: ports.kongPort,
+        studioPort: ports.studioPort,
+      })
+    }
+
+    return { success: true, project: finalProject }
   } catch (error) {
     console.error('Failed to create project:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }

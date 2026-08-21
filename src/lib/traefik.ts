@@ -57,15 +57,17 @@ export async function generateProjectTraefikConfig(config: TraefikConfig): Promi
       service: ${projectSlug}-api
       priority: 5`
 
+    // No healthCheck here: Kong allowed unauthenticated /health, but newer
+    // templates default to Envoy, which returns 401 on /health (and /) for
+    // unauthenticated requests. A healthCheck against that path would make
+    // Traefik permanently mark the backend unhealthy ("no available server")
+    // even though the container is fine -- Docker's own compose healthcheck
+    // already gates container health independently.
     servicesConfig += `
     ${projectSlug}-api:
       loadBalancer:
         servers:
-          - url: "http://${projectSlug}-kong:${kongPort}"
-        healthCheck:
-          path: /health
-          interval: 30s
-          timeout: 5s`
+          - url: "http://${projectSlug}-gateway:${kongPort}"`
   }
 
   // Studio domain configuration
@@ -163,12 +165,20 @@ export async function removeProjectTraefikConfig(projectSlug: string): Promise<v
 }
 
 /**
- * Get the ports used by a project's services from environment variables
+ * Get the ports used by a project's services *inside the Docker network*.
+ *
+ * IMPORTANT: these are NOT the host-published ports (KONG_HTTP_PORT /
+ * STUDIO_PORT can be anything the user configured). Traefik talks to the
+ * containers over the internal `supapanel-network`, where the Supabase
+ * images always listen on their fixed image-defined ports regardless of
+ * what's published to the host: api-gw (kong/envoy) on 8000, studio on
+ * 3000. Using the host-mapped env values here produces a Traefik target
+ * that doesn't exist on the internal network (connection refused / 502).
  */
-export function getProjectPorts(envVars: Record<string, string>): { kongPort: number; studioPort: number } {
+export function getProjectPorts(_envVars: Record<string, string>): { kongPort: number; studioPort: number } {
   return {
-    kongPort: parseInt(envVars.KONG_HTTP_PORT || '8000', 10),
-    studioPort: parseInt(envVars.STUDIO_PORT || '3000', 10),
+    kongPort: 8000,
+    studioPort: 3000,
   }
 }
 
