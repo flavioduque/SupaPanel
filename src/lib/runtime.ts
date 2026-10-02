@@ -52,7 +52,7 @@ export function serializeEnv(env: Record<string, string>) {
 }
 
 // Keep the upstream service graph intact. Only the gateway joins the proxy network;
-// Studio is accessed through Kong's authenticated dashboard route.
+// Studio is accessed through the gateway's authenticated dashboard route.
 export function prepareCompose(
   source: string,
   slug: string,
@@ -87,10 +87,18 @@ export function prepareCompose(
     default: {},
     ...(useProxy ? { proxy: { external: true, name: proxyNetwork() } } : {}),
   };
-  if (useProxy) compose.services.kong.networks.proxy = {};
+  const gateway = compose.services["api-gw"] ?? compose.services.kong;
+  if (compose.services["api-gw"] && compose.services.realtime) {
+    // Envoy's cds.yaml addresses the upstream Realtime container hostname.
+    const network = compose.services.realtime.networks.default;
+    network.aliases = [...new Set([...(network.aliases || []), "realtime-dev.supabase-realtime"])];
+  }
+  // Preserve existing standalone Traefik targets without renaming either gateway.
+  if (useProxy) gateway.networks.proxy = compose.services["api-gw"]
+    ? { aliases: [`${slug}-kong`] }
+    : {};
   if (dokploy) {
-    compose.services.kong.networks.proxy = {};
-    compose.services.kong.labels = { "traefik.enable": "false" };
+    gateway.labels = { "traefik.enable": "false" };
   } else {
     // POSTGRES_PORT is an internal port used by all services, never a host port.
     compose.services.supavisor.ports = [
@@ -134,6 +142,6 @@ export function routeCompose(
   }
   labels[`traefik.http.middlewares.${slug}-https.redirectscheme.scheme`] =
     "https";
-  compose.services.kong.labels = labels;
+  (compose.services["api-gw"] ?? compose.services.kong).labels = labels;
   return stringify(compose);
 }

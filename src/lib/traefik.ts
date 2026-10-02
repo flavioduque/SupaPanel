@@ -176,7 +176,7 @@ export async function removeProjectTraefikConfig(projectSlug: string): Promise<v
  */
 export function getProjectPorts(envVars: Record<string, string>): { kongPort: number; studioPort: number } {
   return {
-    kongPort: parseInt(envVars.KONG_HTTP_PORT || '8000', 10),
+    kongPort: parseInt(envVars.API_GW_HTTP_PORT || envVars.KONG_HTTP_PORT || '8000', 10),
     studioPort: parseInt(envVars.STUDIO_PORT || '3000', 10),
   }
 }

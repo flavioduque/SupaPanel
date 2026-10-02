@@ -1,0 +1,181 @@
+# Trimmed from https://raw.githubusercontent.com/supabase/supabase/4ab54b935919ba3f4bb92f436ae4e757108e4f8a/docker/docker-compose.yml
+# Gateway intact; other services retain names, mounts, health/dependencies and gateway URLs.
+name: supabase
+services:
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - envoy
+          - kong
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - timeout 1 bash -c '</dev/tcp/127.0.0.1/8000'
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      studio:
+        condition: service_healthy
+    ports:
+      - ${API_GW_HTTP_PORT:-${KONG_HTTP_PORT:-8000}}:8000/tcp
+    volumes:
+      - ./volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./volumes/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
+      - ./volumes/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
+      - ./volumes/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      ANON_KEY_ASYMMETRIC: ${ANON_KEY_ASYMMETRIC:-}
+      SERVICE_ROLE_KEY_ASYMMETRIC: ${SERVICE_ROLE_KEY_ASYMMETRIC:-}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - /docker-entrypoint.sh
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.09.07-sha-7996410
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://localhost:3000/api/platform/profile').then((r)
+          => {if (r.status !== 200) throw new Error(r.status)})"
+      timeout: 10s
+      interval: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - ./volumes/snippets:/app/snippets:z
+      - ./volumes/functions:/app/edge-functions:ro,z
+    environment:
+      SUPABASE_URL: http://api-gw:8000
+  functions:
+    container_name: supabase-edge-functions
+    image: supabase/edge-runtime:v1.76.2
+    volumes:
+      - ./volumes/functions:/home/deno/functions:z
+      - deno-cache:/root/.cache/deno
+    depends_on:
+      api-gw:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - timeout 1 bash -c '</dev/tcp/127.0.0.1/9000'
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      SUPABASE_URL: http://api-gw:8000
+  realtime:
+    container_name: realtime-dev.supabase-realtime
+    image: supabase/realtime:v2.134.10
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -sSfL --head -o /dev/null -H "Authorization: Bearer ${ANON_KEY}"
+          http://localhost:4000/api/tenants/realtime-dev/health'
+      timeout: 5s
+      interval: 30s
+      retries: 3
+      start_period: 10s
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    volumes:
+      - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
+      - ./volumes/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
+      - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ./volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      - ./volumes/db/data:/var/lib/postgresql/data:Z
+      - ./volumes/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
+      - ./volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
+      - ./volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
+      - db-config:/etc/postgresql-custom
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - -U
+        - postgres
+        - -h
+        - localhost
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  storage:
+    container_name: supabase-storage
+    image: supabase/storage-api:v1.74.0
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+      imgproxy:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://storage:5000/status
+      timeout: 5s
+      interval: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./volumes/storage:/var/lib/storage:z
+  imgproxy:
+    container_name: supabase-imgproxy
+    image: darthsim/imgproxy:v3.31.4
+    volumes:
+      - ./volumes/storage:/var/lib/storage:z
+    healthcheck:
+      test:
+        - CMD
+        - imgproxy
+        - health
+      timeout: 5s
+      interval: 5s
+      retries: 3
+  supavisor:
+    container_name: supabase-pooler
+    image: supabase/supavisor:2.9.12
+    ports:
+      - ${POSTGRES_PORT}:5432
+      - ${POOLER_PROXY_PORT_TRANSACTION}:6543
+    volumes:
+      - ./volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -sSfL
+        - --head
+        - -o
+        - /dev/null
+        - http://127.0.0.1:4000/api/health
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  db-config: null
+  deno-cache: null

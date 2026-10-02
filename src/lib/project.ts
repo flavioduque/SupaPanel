@@ -216,6 +216,7 @@ export async function provisionProjectFiles(project: { id: string; slug: string;
       S3_PROTOCOL_ACCESS_KEY_SECRET: secret(64),
       IMGPROXY_AUTO_WEBP: 'true',
       POOLER_PROXY_PORT_TRANSACTION: (basePort + 3000).toString(),
+      // Envoy falls back to KONG_HTTP_PORT; keep one generated HTTP port for both templates.
       KONG_HTTP_PORT: basePort.toString(),
       KONG_HTTPS_PORT: (basePort + 443).toString(),
       ANALYTICS_PORT: (basePort + 1000).toString(),
