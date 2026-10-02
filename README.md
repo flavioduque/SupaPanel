@@ -162,6 +162,7 @@ Novas instâncias usam o commit oficial [`9e225a2`](https://github.com/supabase/
 - O status do dashboard indica a última operação realizada pelo painel.
 - Faça backup do banco de metadados, de `${DATA_PATH}/projects` e dos volumes Docker de cada instância, incluindo `<slug>_postgres-data` e `<slug>_storage-data` nas novas stacks.
 - Cada instância executa uma stack completa; dimensione memória, CPU e disco para a quantidade de projetos.
+- **Métricas do dashboard:** RAM e Rede refletem a máquina (ou LXC/VM) onde o Docker roda graças às montagens somente leitura `/proc:/host/proc:ro` e `/sys/fs/cgroup:/host/cgroup:ro` no serviço `panel`. A RAM usa o working set do cgroup (`memory.current` − `inactive_file`), como o `docker stats`; a Rede soma as interfaces físicas e mostra a taxa (bytes/s) com o total acumulado. Sem as montagens, os cards mostram o escopo do próprio container. Os caminhos podem ser trocados por `HOST_PROC` e `HOST_CGROUP`.
 
 ## VPS sem Dokploy
 

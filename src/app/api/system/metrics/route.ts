@@ -4,6 +4,8 @@ import { validateSession } from '@/lib/auth'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import * as os from 'os'
+import { readFileSync } from 'fs'
+import { networkRate, readMemory, readNetwork, type NetworkSample } from '@/lib/host-metrics'
 
 const execAsync = promisify(exec)
 
@@ -21,11 +23,13 @@ interface SystemMetrics {
         used: number
         total: number
         percentage: number
-    }
+    } | null
     network: {
         bytesIn: number
         bytesOut: number
-    }
+        inPerSec: number
+        outPerSec: number
+    } | null
     uptime: number
     hostname: string
 }
@@ -70,22 +74,19 @@ async function getCpuUsage(): Promise<{ usage: number; cores: number }> {
     }
 }
 
-// Get memory usage
-function getMemoryUsage(): { used: number; total: number; percentage: number } {
-    const total = os.totalmem()
-    const free = os.freemem()
-    const used = total - free
-    const percentage = Math.round((used / total) * 100)
-
-    return {
-        used,
-        total,
-        percentage
+function readText(path: string): string | null {
+    try {
+        return readFileSync(path, 'utf8')
+    } catch {
+        return null
     }
 }
 
+// Previous network sample, kept in module memory to compute bytes/s.
+let previousNetwork: NetworkSample | null = null
+
 // Get disk usage
-async function getDiskUsage(): Promise<{ used: number; total: number; percentage: number }> {
+async function getDiskUsage(): Promise<SystemMetrics['disk']> {
     try {
         if (process.platform === 'linux' || process.platform === 'darwin') {
             const { stdout } = await execAsync("df -k / | tail -1 | awk '{print $2, $3, $5}'")
@@ -100,52 +101,19 @@ async function getDiskUsage(): Promise<{ used: number; total: number; percentage
             }
         }
 
-        // Fallback values
-        return { used: 50 * 1024 * 1024 * 1024, total: 100 * 1024 * 1024 * 1024, percentage: 50 }
+        return null
     } catch {
-        return { used: 50 * 1024 * 1024 * 1024, total: 100 * 1024 * 1024 * 1024, percentage: 50 }
+        return null
     }
 }
 
-// Get network stats
-async function getNetworkStats(): Promise<{ bytesIn: number; bytesOut: number }> {
-    try {
-        if (process.platform === 'darwin') {
-            const { stdout } = await execAsync("netstat -ib | head -2 | tail -1 | awk '{print $7, $10}'")
-            const parts = stdout.trim().split(/\s+/)
-
-            if (parts.length >= 2) {
-                return {
-                    bytesIn: parseInt(parts[0]) || 0,
-                    bytesOut: parseInt(parts[1]) || 0
-                }
-            }
-        } else if (process.platform === 'linux') {
-            const { stdout } = await execAsync("cat /proc/net/dev | grep -E 'eth0|ens|wlan' | head -1 | awk '{print $2, $10}'")
-            const parts = stdout.trim().split(/\s+/)
-
-            if (parts.length >= 2) {
-                return {
-                    bytesIn: parseInt(parts[0]) || 0,
-                    bytesOut: parseInt(parts[1]) || 0
-                }
-            }
-        }
-
-        // Fallback
-        const networkInterfaces = os.networkInterfaces()
-        let totalBytes = 0
-
-        for (const iface of Object.values(networkInterfaces)) {
-            if (iface) {
-                totalBytes += iface.length
-            }
-        }
-
-        return { bytesIn: totalBytes * 1024 * 1024, bytesOut: totalBytes * 512 * 1024 }
-    } catch {
-        return { bytesIn: 1024 * 1024 * 100, bytesOut: 1024 * 1024 * 50 }
-    }
+function getNetworkStats(): SystemMetrics['network'] {
+    const totals = readNetwork(readText)
+    if (!totals) return null
+    const sample = { ...totals, at: Date.now() }
+    const rate = networkRate(previousNetwork, sample)
+    previousNetwork = sample
+    return { ...totals, ...rate }
 }
 
 export async function GET(request: NextRequest) {
@@ -169,13 +137,13 @@ export async function GET(request: NextRequest) {
         }
 
         // Gather all metrics
-        const [cpu, disk, network] = await Promise.all([
+        const [cpu, disk] = await Promise.all([
             getCpuUsage(),
-            getDiskUsage(),
-            getNetworkStats()
+            getDiskUsage()
         ])
 
-        const memory = getMemoryUsage()
+        const memory = readMemory(readText, { total: os.totalmem(), free: os.freemem() })
+        const network = getNetworkStats()
 
         const metrics: SystemMetrics = {
             cpu,

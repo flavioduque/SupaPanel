@@ -18,18 +18,22 @@ interface SystemMetrics {
         used: number
         total: number
         percentage: number
-    }
+    } | null
     network: {
         bytesIn: number
         bytesOut: number
-    }
+        inPerSec: number
+        outPerSec: number
+    } | null
     uptime: number
     hostname: string
 }
 
 interface MetricCardProps {
     title: string
-    value: number
+    // null = no honest percentage: the ring is hidden and `headline` is shown.
+    value: number | null
+    headline?: string
     subtitle: string
     icon: React.ReactNode
     color: string
@@ -97,7 +101,7 @@ function DonutChart({ value, color, gradientFrom, gradientTo }: { value: number;
     )
 }
 
-function MetricCard({ title, value, subtitle, icon, color, gradientFrom, gradientTo }: MetricCardProps) {
+function MetricCard({ title, value, headline, subtitle, icon, color, gradientFrom, gradientTo }: MetricCardProps) {
     return (
         <Card className="relative overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50 hover:border-slate-600/50 transition-all duration-300 hover:shadow-xl hover:shadow-black/20 group">
             {/* Glow effect */}
@@ -119,20 +123,22 @@ function MetricCard({ title, value, subtitle, icon, color, gradientFrom, gradien
 
             <CardContent className="flex items-center justify-between pt-0">
                 <div className="space-y-1">
-                    <div className="text-2xl font-bold text-white tracking-tight">
-                        {value}%
+                    <div className={`${value === null ? 'text-lg' : 'text-2xl'} font-bold text-white tracking-tight`}>
+                        {value === null ? headline : `${value}%`}
                     </div>
                     <p className="text-xs text-slate-500 font-medium">
                         {subtitle}
                     </p>
                 </div>
 
-                <DonutChart
-                    value={value}
-                    color={color}
-                    gradientFrom={gradientFrom}
-                    gradientTo={gradientTo}
-                />
+                {value !== null && (
+                    <DonutChart
+                        value={value}
+                        color={color}
+                        gradientFrom={gradientFrom}
+                        gradientTo={gradientTo}
+                    />
+                )}
             </CardContent>
         </Card>
     )
@@ -259,8 +265,9 @@ export default function ServerMetricsCards() {
                 {/* Disk */}
                 <MetricCard
                     title="Disk Usage"
-                    value={metrics.disk.percentage}
-                    subtitle={`${formatBytes(metrics.disk.used)} / ${formatBytes(metrics.disk.total)}`}
+                    value={metrics.disk?.percentage ?? null}
+                    headline="—"
+                    subtitle={metrics.disk ? `${formatBytes(metrics.disk.used)} / ${formatBytes(metrics.disk.total)}` : 'Indisponível'}
                     color="#f59e0b"
                     gradientFrom="#f59e0b"
                     gradientTo="#f97316"
@@ -274,8 +281,9 @@ export default function ServerMetricsCards() {
                 {/* Network */}
                 <MetricCard
                     title="Network"
-                    value={Math.min(100, Math.round((metrics.network.bytesIn / (metrics.network.bytesIn + metrics.network.bytesOut + 1)) * 100))}
-                    subtitle={`↓ ${formatBytes(metrics.network.bytesIn)} ↑ ${formatBytes(metrics.network.bytesOut)}`}
+                    value={null}
+                    headline={metrics.network ? `↓ ${formatBytes(metrics.network.inPerSec)}/s ↑ ${formatBytes(metrics.network.outPerSec)}/s` : '—'}
+                    subtitle={metrics.network ? `Total: ↓ ${formatBytes(metrics.network.bytesIn)} ↑ ${formatBytes(metrics.network.bytesOut)}` : 'Indisponível'}
                     color="#a855f7"
                     gradientFrom="#a855f7"
                     gradientTo="#ec4899"
