@@ -20,6 +20,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Must be identical on host and container: sibling containers use host paths.
       - ${DATA_PATH:-/etc/supapanel}:${DATA_PATH:-/etc/supapanel}
+      # Read-only: dashboard RAM/Network of the machine (or LXC/VM), not of this container.
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/cgroup:ro
     expose:
       - '3000'
     networks:

@@ -289,6 +289,8 @@ services:
     volumes:
       - ${DATA_PATH}:${DATA_PATH}
       - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/cgroup:ro
     networks:
       - supapanel-network
     depends_on:
