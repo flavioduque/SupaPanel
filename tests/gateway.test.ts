@@ -10,8 +10,8 @@ let originalEnv: NodeJS.ProcessEnv;
 beforeEach(() => { originalEnv = { ...process.env }; });
 afterEach(() => { process.env = originalEnv; });
 
-// SHA-256 of pre-fix prepareCompose output from the real, trimmed Kong fixture.
-const kongBaseline: Record<string, string> = {"dokploy": "9e6031ecb4c4ac70fe710c7197203ffb2a956f9d38f63720799ab65a364857e3", "production": "867ed5a03ac77a37b4f3fa9d2a548773939dff7b62f58b2d13a2acf18876b38e", "development": "cb6c7215af4fe36fa3dd097f9f8d03c1fd1aadb678f198ea700879dfcac4c5d8"};
+// SHA-256 of prepareCompose (re-pinned when healthchecks gained start_period; previously pre-fix) output from the real, trimmed Kong fixture.
+const kongBaseline: Record<string, string> = {"dokploy": "5f9f9342f92fa7ff061e4b2c44873b39b1320aa29e308c42822d77b339e975ae", "production": "f60de5d10b642661ba8645c77b1365c9e125e7ad53f89e3cc4777484ed408841", "development": "79a1ac72f7ba0e14d36c1a09d187e3a1d9b685a0ed2355ff33aaeeab2e55cb22"};
 
 for (const kind of ["kong", "envoy"]) {
   const source = readFileSync(new URL(`./fixtures/${kind}-compose.yml`, import.meta.url), "utf8");
@@ -30,7 +30,9 @@ for (const kind of ["kong", "envoy"]) {
       assert.deepEqual(gateway.networks.default, upstream.services[name].networks.default);
       assert.deepEqual(gateway.networks.proxy, proxy ? (kind === "envoy" ? { aliases: ["fixture-kong"] } : {}) : undefined);
       for (const field of ["image", "environment", "entrypoint", "volumes", "healthcheck", "depends_on"]) {
-        assert.deepEqual(gateway[field], upstream.services[name][field], field);
+        // Healthchecks only gain the first-boot start_period/start_interval (see healthcheck.test.ts).
+        const expected = field === "healthcheck" ? { start_period: "120s", start_interval: "2s", ...upstream.services[name][field] } : upstream.services[name][field];
+        assert.deepEqual(gateway[field], expected, field);
       }
       assert.deepEqual(gateway.ports, mode === "dokploy" ? undefined : upstream.services[name].ports);
       for (const [service, config] of Object.entries(result.services) as [string, { networks: object; labels?: unknown; ports?: unknown }][]) {

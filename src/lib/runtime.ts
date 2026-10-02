@@ -70,6 +70,9 @@ export function prepareCompose(
       Record<string, unknown> | undefined;
     service.networks = { default: networkConfig?.default || {} };
     if (dokploy) delete service.ports;
+    // First boot (db init, auth's ~70 migrations) outlasts upstream's 15s window and `up --wait` aborts.
+    const hc = service.healthcheck as Record<string, unknown> | undefined;
+    if (hc?.test && !hc.start_period) Object.assign(hc, { start_period: "120s", start_interval: "2s" });
   }
   // Docker-managed, per-project data volume avoids host UID/permission mismatches.
   compose.volumes = { ...compose.volumes, "postgres-data": {}, "storage-data": {} };
